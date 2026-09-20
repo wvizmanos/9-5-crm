@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { STAGE_IDS, SOURCE_IDS, sampleLeads, sampleFollowUps } from './data'
+import { STAGE_IDS, SOURCE_IDS, sampleLeads, sampleFollowUps, waTarget } from './data'
 import { api, forceDemo, getConnection, saveConnection, clearConnection, setDemoFlag, ApiError } from './api'
 
 /* Sheets-backed store (migration Phase 1).
@@ -36,7 +36,7 @@ function mapRow(r) {
     phone: String(r.phone || ''),
     source: SOURCE_IDS.includes(r.source) ? r.source : 'manual',
     product: r.product || 'Other',
-    stage: STAGE_IDS.includes(r.stage) ? r.stage : 'new',
+    stage: STAGE_IDS.includes(String(r.stage || '').toLowerCase()) ? String(r.stage).toLowerCase() : 'new',
     value: Number(String(r.value || '0').replace(/[^0-9]/g, '')) || 0,
     intent: Number(r.intent) || 50,
     notes: r.notes || '',
@@ -687,7 +687,7 @@ export function StoreProvider({ children }) {
     async sendWhatsApp(lead, tpl) {
       if (!lead || !tpl) return { ok: false, error: 'nothing to send' }
       if (demoMode || authFailedRef.current) return { ok: false, error: 'demo mode - connect the sheet to auto-send' }
-      const digits = String(lead.phone || '').replace(/[^0-9]/g, '')
+      const digits = waTarget(lead.phone)
       if (!digits) { pushToast('This lead has no phone number yet', 'error'); return { ok: false, error: 'phone missing' } }
       const msg = String(tpl.body || '')
         .replace(/\{name\}/g, String(lead.name || '').split(' ')[0] || 'there')

@@ -120,4 +120,12 @@ export const api = {
   tplDel: (id) => call('tpl_del', { id }),
   tplList: () => call('tpl_list'),
   tplUse: (id, base) => call('tpl_use', { id, base }),
+
+  // —— Email (multichannel) ——
+  // Quotation email relayed through the script owner's Google account
+  // (MailApp). Token-gated like every other write action - it is not in the
+  // backend's public action list.
+  sendEmail: (to, subject, htmlBody, leadId, replyTo) =>
+    call('send_email', { to, subject, htmlBody, leadId, replyTo }),
+  emailQuota: () => call('email_quota'),
 }

@@ -38,7 +38,7 @@ export default function App() {
           <div className="flex min-w-0 items-center gap-2.5">
             <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-wagreen text-sm font-bold text-white">A</span>
             <div className="min-w-0">
-              <h1 className="truncate text-base font-bold leading-tight">9-5 CRM</h1>
+              <h1 className="truncate text-base font-bold leading-tight">NineToFive</h1>
               <p className="hidden text-[11px] leading-tight text-navy/50 sm:block">Lead &amp; pipeline tracker</p>
             </div>
           </div>

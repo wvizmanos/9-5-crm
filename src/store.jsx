@@ -748,6 +748,35 @@ export function StoreProvider({ children }) {
         return { ok: false, added: 0 }
       }
     },
+    // Email (multichannel). The backend action writes the activity row
+    // itself ("Email sent: <subject>"); the append below is optimistic and
+    // refetchOnSettle reconciles it with the sheet's truth.
+    async sendEmail(lead, { to, subject, htmlBody }) {
+      if (!lead || !subject) return { ok: false, error: 'nothing to send' }
+      if (demoMode || authFailedRef.current) return { ok: false, error: 'demo mode - connect the sheet to send email' }
+      const addr = String(to || '').trim()
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(addr)) {
+        pushToast('Enter a valid recipient email', 'error')
+        return { ok: false, error: 'bad email' }
+      }
+      pushToast('Sending email...', 'info')
+      try {
+        const r = await api.sendEmail(addr, subject, htmlBody, String(lead.id))
+        if (r && r.ok) {
+          const label = 'Email sent: ' + subject
+          setLeads((ls) => ls.map((l) => (String(l.id) === String(lead.id) ? { ...l, activity: [...(l.activity || []), { t: 'email', ts: new Date().toISOString(), label }] } : l)))
+          refetchOnSettle()
+          pushToast('Email sent to ' + addr, 'success')
+        } else {
+          pushToast('Email: ' + ((r && r.error) || 'send failed'), 'error')
+        }
+        return r
+      } catch (e) {
+        pushToast('Email: ' + ((e && e.message) || 'send failed'), 'error')
+        return { ok: false, error: String((e && e.message) || e) }
+      }
+    },
+
     linksFor(leadId) {
       return linksRef.current.filter((ln) => String(ln.leadId) === String(leadId))
     },

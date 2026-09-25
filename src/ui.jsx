@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { autoMap, IMPORT_TARGETS, parseCsv, rowsToLeads } from './csv'
-import { SOURCE_STYLES, SOURCES, STAGES, sourceLabel } from './data'
+import { SOURCE_STYLES, SOURCES, STAGES, smsLink, sourceLabel, viberLink, waTarget } from './data'
 import { formatDate, formatPeso, isOverdue, todayISO, useStore } from './store'
-import { getConnection } from './api'
+import { api, getConnection } from './api'
 
 // ---------- small shared bits ----------
 
@@ -186,7 +186,7 @@ export function TrackedLinks({ lead }) {
       if (res && res.id) {
         localStorage.setItem('waaida-proposal-url', url.trim())
         const msg = 'Here is your proposal: ' + res.trackUrl
-        const digits = String(lead.phone || '').replace(/[^0-9]/g, '').replace(/^0/, '')
+        const digits = waTarget(lead.phone)
         if (channel === 'whatsapp') {
           window.open(`https://wa.me/${digits}?text=${encodeURIComponent(msg)}`, '_blank', 'noopener')
         } else if (channel === 'viber') {
@@ -299,10 +299,197 @@ export function TrackedLinks({ lead }) {
   )
 }
 
+// ---------- Email quotation (multichannel) ----------
+
+// The Leads sheet has no email column, so the recipient is entered per send
+// and remembered on this device per lead.
+const EMAIL_BOOK_KEY = '***'
+
+function loadEmailBook() {
+  try {
+    const p = JSON.parse(localStorage.getItem(EMAIL_BOOK_KEY))
+    return p && typeof p === "object" ? p : {}
+  } catch { return {} }
+}
+
+function esc(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;")
+}
+
+// Tracked links live behind the backend splash route; fall back to the raw
+// destination when the sheet is not connected.
+function trackingUrl(ln) {
+  if (!ln) return ""
+  const base = getConnection().url
+  return base ? base + "?action=open&id=" + encodeURIComponent(ln.id) : (ln.url || "")
+}
+
+// Table + inline styles only - the shape Gmail, Outlook and phone clients keep.
+function quoteMail({ leadName, title, amount, services, validity, message, link }) {
+  const first = String(leadName || '').split(' ')[0] || 'there'
+  const peso = formatPeso(Number(String(amount || '').replace(/[^0-9]/g, '')) || 0)
+  const items = String(services || '').split('\n').map((s) => s.trim()).filter(Boolean)
+  const days = Number(String(validity || '').replace(/[^0-9]/g, '')) || 0
+  const t = 'font:14px/1.6 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#16213e;margin:0 0 12px'
+
+  const rows = items.map((s) =>
+    '<tr><td style="padding:8px 0;border-bottom:1px solid #f0e9df;' + t + '">' + esc(s) + '</td></tr>'
+  ).join("")
+
+  const html = [
+    '<div style="margin:0;padding:24px 14px;background:#fdf8f3">',
+    '<div style="max-width:560px;margin:0 auto;background:#fff;border:1px solid #f0e9df;border-radius:14px;overflow:hidden">',
+    '<div style="background:#16213e;padding:16px 22px"><span style="font:700 16px/1.2 -apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#fff"><span style="color:#25d366">&#9679;</span> NineToFive</span></div>',
+    '<div style="padding:22px">',
+    '<p style="' + t + '">Hi ' + esc(first) + ',</p>',
+    '<h2 style="font:700 20px/1.3 -apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#16213e;margin:0 0 4px">' + esc(title || 'Your quotation') + '</h2>',
+    amount ? '<p style="font:700 22px/1.3 -apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#1b5e20;margin:6px 0 14px">' + esc(peso) + '</p>' : "",
+    rows ? '<table role="presentation" style="width:100%;border-collapse:collapse;margin:0 0 14px">' + rows + '</table>' : "",
+    message ? '<p style="' + t + '">' + esc(message) + '</p>' : "",
+    link ? '<p style="margin:0 0 16px"><a href="' + esc(link) + '" style="display:inline-block;background:#25d366;color:#fff;text-decoration:none;font:600 14px/1 -apple-system,Segoe UI,Roboto,Arial,sans-serif;padding:11px 18px;border-radius:9px">View details</a></p>' : "",
+    days ? '<p style="' + t + 'font-size:12px;color:#6b7280">This quotation is valid for ' + days + ' day' + (days > 1 ? 's' : '') + ' from today.</p>' : "",
+    '<p style="' + t + 'font-size:12px;color:#6b7280">Sent from NineToFive - lead &amp; pipeline tracker.</p>',
+    "</div></div></div>",
+  ].join("")
+
+  const text = [
+    'Hi ' + first + ',',
+    "",
+    title || "Your quotation",
+    amount ? peso : "",
+    items.map((s) => "- " + s).join("\n"),
+    message || "",
+    link ? 'View details: ' + link : "",
+    days ? 'This quotation is valid for ' + days + ' day' + (days > 1 ? 's' : '') + '.' : "",
+  ].filter((x) => x !== "").join("\n")
+
+  return { html, text }
+}
+
+function EmailQuotation({ lead, onClose }) {
+  const { links, sync, actions, pushToast } = useStore()
+  const live = sync.connState === 'live'
+  const book = loadEmailBook()
+  const [to, setTo] = useState(book[String(lead.id)] || '')
+  const [title, setTitle] = useState(lead.product ? String(lead.product) + ' - quotation' : '')
+  const [amount, setAmount] = useState(lead.value ? String(lead.value) : '')
+  const [services, setServices] = useState('')
+  const [validity, setValidity] = useState('14')
+  const [message, setMessage] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [quota, setQuota] = useState(null)
+
+  // Option (b): prefill the link from this lead's most recent tracked link.
+  const mine = Array.isArray(links) ? links.filter((ln) => String(ln.leadId) === String(lead.id)) : []
+  const latest = mine.length ? mine[mine.length - 1] : null
+  const [link, setLink] = useState(trackingUrl(latest))
+
+  const composed = quoteMail({ leadName: lead.name, title, amount, services, validity, message, link })
+  const subject = 'Quotation: ' + (title.trim() || 'NineToFive')
+
+  useEffect(() => {
+    if (!live) return
+    let alive = true
+    api.emailQuota().then((r) => { if (alive && r && typeof r.remaining === "number") setQuota(r) }).catch(() => {})
+    return () => { alive = false }
+  }, [live])
+
+  function remember(addr) {
+    try {
+      localStorage.setItem(EMAIL_BOOK_KEY, JSON.stringify({ ...loadEmailBook(), [String(lead.id)]: addr }))
+    } catch { /* storage is optional */ }
+  }
+
+  async function send() {
+    const addr = to.trim()
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(addr)) { pushToast("Enter a valid recipient email", "error"); return }
+    if (!title.trim()) { pushToast("Give the quotation a title first", "error"); return }
+    setBusy(true)
+    try {
+      if (live) {
+        const r = await actions.sendEmail(lead, { to: addr, subject, htmlBody: composed.html })
+        if (r && r.ok) {
+          remember(addr)
+          if (typeof r.remaining === "number") setQuota({ remaining: r.remaining })
+          onClose && onClose()
+        }
+      } else {
+        // No backend: hand the quotation to the phone's own mail app, the
+        // same fallback shape the WhatsApp chips already use.
+        remember(addr)
+        window.location.href = 'mailto:' + encodeURIComponent(addr) + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(composed.text)
+        pushToast("Opening your mail app", "info")
+        onClose && onClose()
+      }
+    } finally { setBusy(false) }
+  }
+
+  return (
+    <div className="space-y-2 rounded-lg border border-wagreen/40 bg-wagreen/5 p-3">
+      <input
+        id="quotation-to"
+        className={inputCls}
+        type="email"
+        inputMode="email"
+        autoComplete="off"
+        placeholder="Client email (e.g. owner@shop.ph)"
+        value={to}
+        onChange={(e) => setTo(e.target.value)}
+      />
+      <input
+        id="quotation-title"
+        className={inputCls}
+        placeholder="Quotation title"
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+      />
+      <div className="grid grid-cols-2 gap-2">
+        <input className={inputCls} inputMode="numeric" placeholder="Amount (PHP)" value={amount} onChange={(e) => setAmount(e.target.value)} />
+        <input className={inputCls} inputMode="numeric" placeholder="Validity (days)" value={validity} onChange={(e) => setValidity(e.target.value)} />
+      </div>
+      <textarea
+        className={inputCls + " min-h-16 resize-y"}
+        placeholder="What is included - one item per line"
+        value={services}
+        onChange={(e) => setServices(e.target.value)}
+      />
+      <textarea
+        className={inputCls + " min-h-12 resize-y"}
+        placeholder="Short note to the client (optional)"
+        value={message}
+        onChange={(e) => setMessage(e.target.value)}
+      />
+      <input
+        id="quotation-link"
+        className={inputCls}
+        placeholder="Link to include (optional)"
+        value={link}
+        onChange={(e) => setLink(e.target.value)}
+      />
+      <p className="text-[11px] leading-relaxed text-navy/40">
+        {latest ? "Prefilled from this lead's latest tracked link - opens are still counted." : "No tracked link for this lead yet - paste one, or leave it empty."}
+      </p>
+      <div className="overflow-hidden rounded-lg border border-stone-200 bg-white">
+        <iframe title="Quotation preview" sandbox="" srcDoc={composed.html} className="h-56 w-full" />
+      </div>
+      <p className="text-[11px] leading-relaxed text-navy/40">
+        {live
+          ? "Sends from your connected Google account by email." + (quota && quota.remaining >= 0 ? " " + quota.remaining + " recipient" + (quota.remaining === 1 ? "" : "s") + " left today." : "")
+          : "Your sheet is not connected - this opens your own mail app instead, so you can still send it."}
+      </p>
+      <Button id="quotation-send" className="w-full" onClick={send} disabled={busy}>
+        {busy ? "Sending..." : "Send quotation"}
+      </Button>
+    </div>
+  )
+}
+
 export function LeadDrawer({ lead, onClose, onEdit }) {
   const { actions, sync, templates } = useStore()
   const [noteText, setNoteText] = useState(null) // null = pristine (show lead.notes)
   const [followUp, setFollowUp] = useState(null) // null = pristine
+  const [emailing, setEmailing] = useState(false)
 
   // Opening a drawer acknowledges that lead's link-open badges.
   useEffect(() => {
@@ -315,8 +502,12 @@ export function LeadDrawer({ lead, onClose, onEdit }) {
   const followUpValue = followUp ?? lead.nextFollowUp ?? ''
   const notesDirty = noteText !== null && noteText !== (lead.notes || '')
   const followUpDirty = followUp !== null && followUp !== (lead.nextFollowUp || '')
-  const waNumber = lead.phone.replace(/[^\d]/g, '').replace(/^0/, '')
+  const waNumber = waTarget(lead.phone)
   const waLink = `https://wa.me/${waNumber}`
+  // Multichannel: same number, no infrastructure - the phone's own Viber /
+  // SMS app opens. Empty string when the lead has no usable number.
+  const viberHref = viberLink(lead.phone)
+  const smsHref = smsLink(lead.phone)
   const activity = lead.activity || []
 
   return (
@@ -398,6 +589,55 @@ export function LeadDrawer({ lead, onClose, onEdit }) {
               Chat on WhatsApp
             </a>
             <Button variant="secondary" onClick={() => onEdit(lead)}>Edit</Button>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            {viberHref ? (
+              <a
+                href={viberHref}
+                data-channel="viber"
+                target="_blank"
+                rel="noopener noreferrer"
+                className={`${btnBase} gap-2 border border-stone-300 bg-white px-3 py-2 text-navy shadow-sm hover:border-navy/40 hover:bg-stone-50 active:bg-stone-100`}
+              >
+                <span className="h-2 w-2 rounded-full" style={{ backgroundColor: '#7360f2' }} />
+                Viber
+              </a>
+            ) : (
+              <span className={`${btnBase} cursor-not-allowed border border-dashed border-stone-300 px-3 py-2 text-navy/30`} title="This lead has no phone number yet">Viber</span>
+            )}
+            {smsHref ? (
+              <a
+                href={smsHref}
+                data-channel="sms"
+                className={`${btnBase} gap-2 border border-stone-300 bg-white px-3 py-2 text-navy shadow-sm hover:border-navy/40 hover:bg-stone-50 active:bg-stone-100`}
+              >
+                <span className="h-2 w-2 rounded-full" style={{ backgroundColor: '#16213e' }} />
+                SMS
+              </a>
+            ) : (
+              <span className={`${btnBase} cursor-not-allowed border border-dashed border-stone-300 px-3 py-2 text-navy/30`} title="This lead has no phone number yet">SMS</span>
+            )}
+          </div>
+
+          <div>
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="text-sm font-semibold">Quotation email</h3>
+              <button
+                id="email-quotation-toggle"
+                className="text-xs font-medium text-deepgreen hover:underline"
+                onClick={() => setEmailing((v) => !v)}
+              >
+                {emailing ? 'Cancel' : 'Email quotation'}
+              </button>
+            </div>
+            {emailing ? (
+              <EmailQuotation lead={lead} onClose={() => setEmailing(false)} />
+            ) : (
+              <p className="text-[11px] leading-relaxed text-navy/40">
+                Send a formal quotation by email - title, amount, what is included and a link to whatever you shared.
+              </p>
+            )}
           </div>
 
           <div>

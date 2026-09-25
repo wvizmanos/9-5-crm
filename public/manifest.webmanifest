@@ -1,6 +1,6 @@
 {
-  "name": "9-5 CRM",
-  "short_name": "9-5 CRM",
+  "name": "NineToFive",
+  "short_name": "NineToFive",
   "description": "Lightweight lead & pipeline tracker for WhatsApp-based selling.",
   "start_url": "/9-5-crm/",
   "scope": "/9-5-crm/",

@@ -178,3 +178,27 @@ export const seedLeads = () => [
     activity: [{ at: d(-1), text: 'Quotation ₱150,000 sent via WhatsApp' }],
   },
 ]
+
+// Normalizes PH phone formats (09xx..., 9xx..., +63...) into international digits
+// for the WhatsApp Cloud API and wa.me links. One place, every call site.
+export function waTarget(phone) {
+  let d = String(phone || '').replace(/[^0-9]/g, '')
+  if (d.startsWith('0')) d = d.replace(/^0+/, '')
+  if (d.length === 10 && d.startsWith('9')) d = '63' + d
+  return d
+}
+
+// Deep links for the channels that need no server: the phone's own Viber /
+// SMS app opens on the same number the wa.me chip already uses. Empty string
+// means the lead has no usable number.
+export function viberLink(phone, text) {
+  const d = waTarget(phone)
+  if (!d) return ''
+  return 'viber://chat?number=%2B' + d + (text ? '&text=' + encodeURIComponent(text) : '')
+}
+
+export function smsLink(phone, text) {
+  const d = waTarget(phone)
+  if (!d) return ''
+  return 'sms:+' + d + (text ? '?body=' + encodeURIComponent(text) : '')
+}

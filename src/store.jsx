@@ -777,6 +777,17 @@ export function StoreProvider({ children }) {
       }
     },
 
+    // Records that a channel was opened for this lead. The link-first flow
+    // cannot confirm a send, so the label says "opened" - a touch trail, not
+    // delivery proof. Local append always; sheet write only when live.
+    logActivity(lead, label) {
+      if (!lead || !label) return
+      const entry = { t: 'wa', ts: new Date().toISOString(), label: label }
+      setLeads((ls) => ls.map((l) => (String(l.id) === String(lead.id) ? { ...l, activity: [...(l.activity || []), entry] } : l)))
+      if (demoMode || authFailedRef.current) return
+      api.actLog(String(lead.id), label).catch(() => {})
+    },
+
     linksFor(leadId) {
       return linksRef.current.filter((ln) => String(ln.leadId) === String(leadId))
     },

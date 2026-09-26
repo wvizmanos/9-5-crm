@@ -38,6 +38,15 @@ const srcDoc = (page) => page.evaluate(() => {
   page.on("request", (r) => { if (r.url().includes("script.google.com")) backendHits.push(r.url()); });
 
   await page.goto(URL, { waitUntil: "networkidle2", timeout: 60000 });
+  // Stop anchors from actually navigating: the WhatsApp / Viber / SMS chips are
+  // real links, and a stray wa.me tab hangs the harness. preventDefault in the
+  // capture phase does not stop React's own onClick, so the handlers still run.
+  await page.evaluate(() => {
+    document.addEventListener("click", (e) => {
+      const a = e.target && e.target.closest && e.target.closest("a[href]");
+      if (a) e.preventDefault();
+    }, true);
+  });
   await sleep(1300);
 
   check("app boots with content", (await text(page)).length > 200);
@@ -66,6 +75,33 @@ const srcDoc = (page) => page.evaluate(() => {
 
   check("no reason line when the phone is fine", !(await text(page)).includes("Viber and SMS are unavailable"));
 
+  // ---- WhatsApp touch logging ------------------------------------------
+  await page.evaluate(() => { window.__wa = []; window.open = (u) => { window.__wa.push(u); return null; }; });
+  const activityBefore = await text(page);
+  const clickedChip = await page.evaluate(() => {
+    const b = Array.from(document.querySelectorAll("button")).find((x) => /First touch/.test(x.textContent || ""));
+    if (!b) return false;
+    b.click();
+    return true;
+  });
+  await sleep(700);
+  const activityAfter = await text(page);
+  const waOpened = await page.evaluate(() => window.__wa || []);
+  check("template chip opens WhatsApp with the message",
+    clickedChip && waOpened.length === 1 && waOpened[0].startsWith("https://wa.me/") && waOpened[0].includes("text="),
+    JSON.stringify(waOpened).slice(0, 90));
+  check("WhatsApp touch is logged to the activity log",
+    !activityBefore.includes("WhatsApp opened: First touch") && activityAfter.includes("WhatsApp opened: First touch"));
+  check("chat button also logs a touch",
+    (await page.evaluate(() => {
+      const a = Array.from(document.querySelectorAll("a")).find((x) => (x.textContent || "").includes("Chat on WhatsApp"));
+      if (!a) return false;
+      a.click();
+      return true;
+    })) && (await page.evaluate(() => document.body.innerText.split("WhatsApp opened").length - 1)) >= 2,
+    "");
+
+  // ---- quotation email composer ----------------------------------------
   const toggled = await page.evaluate(() => {
     const b = document.getElementById("email-quotation-toggle");
     if (!b) return false;
@@ -114,16 +150,13 @@ const srcDoc = (page) => page.evaluate(() => {
   check("zero runtime errors before the handoff", errors.length === 0, errors.slice(0, 4).join(" || ") || "NONE");
 
   // ---- demo-mode handoff (tears the document down) ----------------------
-  const before = page.url();
+  const urlBefore = page.url();
   await page.click("#quotation-send");
   await sleep(1200);
   const composerGone = await page.evaluate(() => !document.getElementById("quotation-title")).catch(() => true);
-  check("demo send hands off to the mail app (composer closes)", composerGone, "url before=" + before);
+  check("demo send hands off to the mail app (composer closes)", composerGone, "url before=" + urlBefore);
 
   // ---- a lead whose phone has no usable digits --------------------------
-  // Seed the app's own cached snapshot with a "Lala" phone, then reload: the
-  // Viber/SMS chips must disable AND say why (a tooltip alone is invisible on
-  // touch, which is what made this look like a broken button).
   await page.goto(URL, { waitUntil: "networkidle2", timeout: 60000 });
   await sleep(1200);
   const seeded = await page.evaluate(() => {
@@ -132,7 +165,7 @@ const srcDoc = (page) => page.evaluate(() => {
     });
     if (!key) return null;
     const snap = JSON.parse(localStorage.getItem(key));
-    snap.leads[0] = { ...snap.leads[0], phone: "Lala" };
+    snap.leads[0] = { ...snap.leads[0], phone: "Lala", activity: [] };
     localStorage.setItem(key, JSON.stringify(snap));
     return { key: key.replace(/[a-z]/gi, "\u2022"), n: snap.leads.length };
   });
@@ -150,6 +183,18 @@ const srcDoc = (page) => page.evaluate(() => {
   }));
   check("chips disable when the phone has no digits", state.viberDisabled && state.smsDisabled, JSON.stringify(state));
   check("disabled chips now say WHY (visible, not a tooltip)", state.reason && state.showsNumber, "");
+
+  // no number -> a WhatsApp touch must NOT be recorded
+  await page.evaluate(() => { window.__wa2 = []; window.open = (u) => { window.__wa2.push(u); return null; }; });
+  const countBefore = await page.evaluate(() => (document.body.innerText.match(/WhatsApp opened: First touch/g) || []).length);
+  await page.evaluate(() => {
+    const b = Array.from(document.querySelectorAll("button")).find((x) => /First touch/.test(x.textContent || ""));
+    if (b) b.click();
+  });
+  await sleep(600);
+  const countAfter = await page.evaluate(() => (document.body.innerText.match(/WhatsApp opened: First touch/g) || []).length);
+  check("no WhatsApp touch logged when there is no usable number", countAfter === countBefore,
+    "log entries before=" + countBefore + " after=" + countAfter);
 
   await browser.close();
   const failed = results.filter((r) => !r.pass);

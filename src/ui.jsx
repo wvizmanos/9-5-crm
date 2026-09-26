@@ -508,6 +508,8 @@ export function LeadDrawer({ lead, onClose, onEdit }) {
   // SMS app opens. Empty string when the lead has no usable number.
   const viberHref = viberLink(lead.phone)
   const smsHref = smsLink(lead.phone)
+  // Only record a WhatsApp touch when there is a number to open.
+  const logWa = (label) => { if (waNumber) actions.logActivity(lead, label) }
   const activity = lead.activity || []
 
   return (
@@ -573,6 +575,7 @@ export function LeadDrawer({ lead, onClose, onEdit }) {
                     const msg = t.body.replace(/\{name\}/g, lead.name.split(' ')[0] || 'there').replace(/\{product\}/g, lead.product || 'it')
                     window.open('https://wa.me/' + waNumber + '?text=' + encodeURIComponent(msg), '_blank', 'noopener')
                     actions.bumpTplUse(t.id)
+                    logWa('WhatsApp opened: ' + t.name)
                   }}
                   className="rounded-full border border-stone-200 bg-white px-3 py-1.5 text-xs font-medium text-navy transition-colors hover:border-wagreen hover:text-deepgreen focus:outline-none focus-visible:ring-2 focus-visible:ring-wagreen/50"
                 >
@@ -584,7 +587,7 @@ export function LeadDrawer({ lead, onClose, onEdit }) {
           </div>
 
           <div className="flex gap-2">
-            <a href={waLink} target="_blank" rel="noopener noreferrer" className={`${btnBase} flex-1 bg-wagreen px-3 py-2 text-white shadow-sm hover:bg-deepgreen active:bg-deepgreen/90`}>
+            <a href={waLink} onClick={() => logWa('WhatsApp opened')} target="_blank" rel="noopener noreferrer" className={`${btnBase} flex-1 bg-wagreen px-3 py-2 text-white shadow-sm hover:bg-deepgreen active:bg-deepgreen/90`}>
               <svg viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor"><path d="M12.04 2a9.9 9.9 0 0 0-8.4 15.2L2.1 22l4.9-1.5A9.9 9.9 0 1 0 12.04 2Zm5.8 14.1c-.25.7-1.45 1.35-2 1.4-.55.05-1.05.15-2.9-.6-2.3-.95-3.75-3.3-3.85-3.45-.1-.15-.9-1.25-.9-2.4 0-1.15.6-1.7.8-1.95.2-.25.45-.3.6-.3h.45c.15 0 .35-.05.55.4.2.5.7 1.75.75 1.85.05.15.1.3 0 .45-.1.15-.15.25-.3.4l-.45.5c-.15.15-.3.3-.15.6.15.3.7 1.2 1.5 1.9 1.05.9 1.9 1.2 2.2 1.35.3.15.45.1.6-.05.15-.15.7-.8.9-1.1.2-.3.35-.25.65-.15.3.15 1.85.9 2.15 1.05.3.15.5.2.55.3.05.15.05.7-.2 1.4Z"/></svg>
               Chat on WhatsApp
             </a>

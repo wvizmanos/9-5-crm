@@ -79,7 +79,7 @@ const srcDoc = (page) => page.evaluate(() => {
   await page.evaluate(() => { window.__wa = []; window.open = (u) => { window.__wa.push(u); return null; }; });
   const activityBefore = await text(page);
   const clickedChip = await page.evaluate(() => {
-    const b = Array.from(document.querySelectorAll("button")).find((x) => /First touch/.test(x.textContent || ""));
+    const b = Array.from(document.querySelectorAll("button")).find((x) => /Warm follow-up/.test(x.textContent || ""));
     if (!b) return false;
     b.click();
     return true;
@@ -91,7 +91,12 @@ const srcDoc = (page) => page.evaluate(() => {
     clickedChip && waOpened.length === 1 && waOpened[0].startsWith("https://wa.me/") && waOpened[0].includes("text="),
     JSON.stringify(waOpened).slice(0, 90));
   check("WhatsApp touch is logged to the activity log",
-    !activityBefore.includes("WhatsApp opened: First touch") && activityAfter.includes("WhatsApp opened: First touch"));
+    !activityBefore.includes("WhatsApp opened: Warm follow-up") && activityAfter.includes("WhatsApp opened: Warm follow-up"));
+  const templateButtons = await page.evaluate(() => Array.from(document.querySelectorAll("button"))
+    .map((b) => (b.textContent || "").trim())
+    .filter((t) => /First touch|Promo nudge|Price list|Price Quotation|Warm follow-up/.test(t)));
+  check("template chips trimmed to the warm follow-up only",
+    templateButtons.length === 1 && templateButtons[0] === "Warm follow-up", JSON.stringify(templateButtons));
   check("chat button also logs a touch",
     (await page.evaluate(() => {
       const a = Array.from(document.querySelectorAll("a")).find((x) => (x.textContent || "").includes("Chat on WhatsApp"));
@@ -186,13 +191,13 @@ const srcDoc = (page) => page.evaluate(() => {
 
   // no number -> a WhatsApp touch must NOT be recorded
   await page.evaluate(() => { window.__wa2 = []; window.open = (u) => { window.__wa2.push(u); return null; }; });
-  const countBefore = await page.evaluate(() => (document.body.innerText.match(/WhatsApp opened: First touch/g) || []).length);
+  const countBefore = await page.evaluate(() => (document.body.innerText.match(/WhatsApp opened: Warm follow-up/g) || []).length);
   await page.evaluate(() => {
-    const b = Array.from(document.querySelectorAll("button")).find((x) => /First touch/.test(x.textContent || ""));
+    const b = Array.from(document.querySelectorAll("button")).find((x) => /Warm follow-up/.test(x.textContent || ""));
     if (b) b.click();
   });
   await sleep(600);
-  const countAfter = await page.evaluate(() => (document.body.innerText.match(/WhatsApp opened: First touch/g) || []).length);
+  const countAfter = await page.evaluate(() => (document.body.innerText.match(/WhatsApp opened: Warm follow-up/g) || []).length);
   check("no WhatsApp touch logged when there is no usable number", countAfter === countBefore,
     "log entries before=" + countBefore + " after=" + countAfter);
 

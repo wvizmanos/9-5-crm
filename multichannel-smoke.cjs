@@ -4,8 +4,8 @@
  *   node multichannel-smoke.cjs          # SMOKE_URL=... to override
  *
  * Demo mode only: must make zero backend calls.
- * NOTE: the final check exercises the demo-mode mailto handoff, which tears the
- * document down in headless Chrome (no mail handler), so it runs last.
+ * The mailto handoff tears the document down in headless Chrome, so it runs
+ * last except for the final section, which reloads the app on purpose.
  */
 const puppeteer = require("puppeteer");
 
@@ -14,7 +14,6 @@ const results = [];
 const check = (name, pass, detail) => { results.push({ name, pass }); console.log((pass ? "PASS  " : "FAIL  ") + name + (detail ? "  -> " + detail : "")); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// React ignores el.value = x; go through the native setter so onChange fires.
 const setValue = (page, sel, value) => page.$eval(sel, (el, v) => {
   const proto = el instanceof window.HTMLTextAreaElement ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
   const set = Object.getOwnPropertyDescriptor(proto, "value").set;
@@ -65,6 +64,8 @@ const srcDoc = (page) => page.evaluate(() => {
   const sms = await page.evaluate(() => { const a = document.querySelector('a[data-channel="sms"]'); return a ? a.getAttribute("href") : null; });
   check("SMS deep link", !!sms && sms.startsWith("sms:+63"), sms || "(missing)");
 
+  check("no reason line when the phone is fine", !(await text(page)).includes("Viber and SMS are unavailable"));
+
   const toggled = await page.evaluate(() => {
     const b = document.getElementById("email-quotation-toggle");
     if (!b) return false;
@@ -87,7 +88,6 @@ const srcDoc = (page) => page.evaluate(() => {
   check("preview never says WA AIDA", !/WA AIDA|AIDA/.test(sd));
   check("link hint reflects no tracked link (demo)", (await text(page)).includes("No tracked link for this lead yet"));
 
-  // ---- validation -------------------------------------------------------
   await page.click("#quotation-send");
   await sleep(500);
   check("empty recipient is rejected", (await text(page)).includes("Enter a valid recipient email"));
@@ -100,7 +100,6 @@ const srcDoc = (page) => page.evaluate(() => {
   check("missing title is rejected", (await text(page)).includes("Give the quotation a title first"));
   check("composer stayed open after both rejections", await page.evaluate(() => !!document.getElementById("quotation-title")));
 
-  // ---- preview follows the composer -------------------------------------
   await setValue(page, "#quotation-title", "Inventory system setup");
   await setValue(page, 'input[placeholder="Amount (PHP)"]', "85000");
   await setValue(page, 'textarea[placeholder="What is included - one item per line"]', "Barcode inventory setup\nStaff training");
@@ -111,16 +110,46 @@ const srcDoc = (page) => page.evaluate(() => {
     "chars=" + sd2.length);
   check("amount renders as pesos", sd2.includes("\u20b1"), "");
 
-  // ---- pre-handoff assertions ------------------------------------------
   check("zero backend calls in demo mode", backendHits.length === 0, backendHits.length + " hit(s)");
   check("zero runtime errors before the handoff", errors.length === 0, errors.slice(0, 4).join(" || ") || "NONE");
 
-  // ---- demo-mode handoff (tears the document down; keep last) ------------
+  // ---- demo-mode handoff (tears the document down) ----------------------
   const before = page.url();
   await page.click("#quotation-send");
   await sleep(1200);
   const composerGone = await page.evaluate(() => !document.getElementById("quotation-title")).catch(() => true);
   check("demo send hands off to the mail app (composer closes)", composerGone, "url before=" + before);
+
+  // ---- a lead whose phone has no usable digits --------------------------
+  // Seed the app's own cached snapshot with a "Lala" phone, then reload: the
+  // Viber/SMS chips must disable AND say why (a tooltip alone is invisible on
+  // touch, which is what made this look like a broken button).
+  await page.goto(URL, { waitUntil: "networkidle2", timeout: 60000 });
+  await sleep(1200);
+  const seeded = await page.evaluate(() => {
+    const key = Object.keys(localStorage).find((k) => {
+      try { const v = JSON.parse(localStorage.getItem(k)); return v && Array.isArray(v.leads) && v.leads.length; } catch { return false; }
+    });
+    if (!key) return null;
+    const snap = JSON.parse(localStorage.getItem(key));
+    snap.leads[0] = { ...snap.leads[0], phone: "Lala" };
+    localStorage.setItem(key, JSON.stringify(snap));
+    return { key: key.replace(/[a-z]/gi, "\u2022"), n: snap.leads.length };
+  });
+  check("seeded a cache snapshot with a bad phone", !!seeded, JSON.stringify(seeded));
+
+  await page.reload({ waitUntil: "networkidle2" });
+  await sleep(1400);
+  await page.evaluate(() => { const c = document.querySelector("div.cursor-pointer"); if (c) c.click(); });
+  await sleep(900);
+  const state = await page.evaluate(() => ({
+    viberDisabled: !document.querySelector('a[data-channel="viber"]'),
+    smsDisabled: !document.querySelector('a[data-channel="sms"]'),
+    reason: document.body.innerText.includes("has no usable digits, so Viber and SMS are unavailable"),
+    showsNumber: document.body.innerText.includes("Lala"),
+  }));
+  check("chips disable when the phone has no digits", state.viberDisabled && state.smsDisabled, JSON.stringify(state));
+  check("disabled chips now say WHY (visible, not a tooltip)", state.reason && state.showsNumber, "");
 
   await browser.close();
   const failed = results.filter((r) => !r.pass);

@@ -620,6 +620,13 @@ export function LeadDrawer({ lead, onClose, onEdit }) {
             )}
           </div>
 
+          {(!viberHref || !smsHref) && (
+            <p className="text-[11px] leading-relaxed text-amber">
+              {String(lead.phone || '').trim()
+                ? `This lead's phone number "${lead.phone}" has no usable digits, so Viber and SMS are unavailable. Fix it in the sheet.`
+                : 'No phone number on this lead yet - add one to use Viber and SMS.'}
+            </p>
+          )}
           <div>
             <div className="mb-2 flex items-center justify-between">
               <h3 className="text-sm font-semibold">Quotation email</h3>
